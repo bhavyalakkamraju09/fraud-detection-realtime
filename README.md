@@ -1,259 +1,258 @@
-# Clinical RAG Voice Agent
+# 🛡️ Real-Time Fraud Detection + Explainability
 
-<div align="center">
-
-[![Live Demo](https://img.shields.io/badge/🤗_HuggingFace-Live_Demo-orange?style=for-the-badge)](https://huggingface.co/spaces/bhavyalakkamraju09/clinical-rag-voice-agent)
-[![GitHub](https://img.shields.io/badge/GitHub-Repository-black?style=for-the-badge&logo=github)](https://github.com/bhavyalakkamraju09/clinical-rag-voice-agent)
-[![CI](https://github.com/bhavyalakkamraju09/clinical-rag-voice-agent/actions/workflows/test.yml/badge.svg)](https://github.com/bhavyalakkamraju09/clinical-rag-voice-agent/actions/workflows/test.yml)
-[![Python 3.11](https://img.shields.io/badge/Python-3.11-blue?logo=python)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow)](LICENSE)
-
-**HIPAA-compliant multi-turn voice QA over 10,000 synthetic clinical notes.**  
-Hybrid BM25+FAISS retrieval · LangGraph orchestration · Presidio PHI redaction · ElevenLabs TTS
-
-</div>
+> **Tech stack:** Apache Kafka · XGBoost · LightGBM · SHAP · Redis · MLflow · Evidently AI · Streamlit · Docker  
+> **Domain:** Financial Services / FinTech — credit card transaction fraud  
+> **Dataset:** [IEEE-CIS Fraud Detection](https://www.kaggle.com/c/ieee-fraud-detection) (590K transactions, 1.5% fraud rate)  
+> **Inference cost:** Zero — XGBoost runs locally, no GPU or paid API needed
 
 ---
 
-## Overview
+## 🏆 Results
 
-A production-grade clinical information retrieval system that answers questions about patient records using voice or text input. Built with a LangGraph multi-agent pipeline, the system combines sparse and dense retrieval with cross-encoder reranking, applies Microsoft Presidio PHI de-identification to every response, and synthesizes answers as speech via ElevenLabs TTS.
-
-All patient data is synthetic — generated with Faker — and no real clinical records are used.
+| Metric | Value |
+|---|---|
+| **XGBoost AUC-ROC** (OOF, 5-fold CV) | **0.9502** |
+| **LightGBM AUC-ROC** | **0.9691** |
+| **LightGBM AUC-PR** | **0.8277** |
+| **Precision / Recall** | **0.86 / 0.72** |
+| **Dataset** | 590K real IEEE-CIS transactions, 3.5% fraud rate |
+| **Features** | 393 (14 engineered + 339 V + 14 C + 17 D + 9 M) |
+| **Throughput** | 500+ transactions/second |
+| **Scoring latency** | < 10ms p99 per transaction |
+| **Class imbalance** | 1:27 — handled via SMOTE + `scale_pos_weight` |
+| **A/B test** | Mann-Whitney U on windowed AUC-PR, auto-promote after 3 consecutive wins |
 
 ---
 
-## Architecture
+## 🏗️ Architecture
 
 ```
-Audio Input (Whisper STT)
+Transaction Generator (Python)
         │
-        ▼
-   Text Query
+        ▼ Kafka topic: transactions
+Feature Engineering Consumer
         │
-        ▼
-┌─────────────────────────────────────────────────┐
-│              LangGraph Agent                     │
-│                                                  │
-│  ┌──────────┐  ┌──────────┐  ┌───────────────┐  │
-│  │  BM25    │  │  FAISS   │  │  RRF Fusion   │  │
-│  │ Sparse   │──│  Dense   │──│    (k=60)     │  │
-│  └──────────┘  └──────────┘  └───────┬───────┘  │
-│                                       │          │
-│                              ┌────────▼────────┐ │
-│                              │ Cross-Encoder   │ │
-│                              │  Re-Ranker      │ │
-│                              └────────┬────────┘ │
-│                                       │          │
-│                              ┌────────▼────────┐ │
-│                              │  Llama 3.1 8B   │ │
-│                              │ (Groq / Ollama) │ │
-│                              └────────┬────────┘ │
-│                                       │          │
-│                              ┌────────▼────────┐ │
-│                              │ Presidio PHI    │ │
-│                              │  Redaction      │ │
-│                              └────────┬────────┘ │
-└───────────────────────────────────────┼──────────┘
-                                        │
-                               ┌────────▼────────┐
-                               │  ElevenLabs TTS │
-                               └────────┬────────┘
-                                        │
-                                  Audio Response
+        ▼ Redis Feature Store (sub-ms rolling windows)
+   A/B Router (80% XGBoost / 20% LightGBM)
+        │
+        ├── XGBoost Champion  → fraud_prob + SHAP explanation
+        └── LightGBM Challenger
+        │
+        ▼ Kafka topic: scored_transactions
+┌───────────────────────────────────────────┐
+│ Streamlit Dashboard                       │
+│  • Live fraud rate chart                  │
+│  • SHAP waterfall (latest fraud)          │
+│  • A/B test results                       │
+│  • Score distribution                     │
+└───────────────────────────────────────────┘
+        │
+        ├── MLflow (experiment tracking)
+        ├── Evidently AI (data drift)
+        └── Prometheus + Grafana (metrics)
 ```
 
 ---
 
-## Dataset
-
-| Property | Value |
-|----------|-------|
-| Synthetic clinical notes | **10,000** |
-| Indexed chunks | **28,821** |
-| Unique diagnoses | **25** |
-| Note types | **5** (follow-up, new patient, procedure, discharge, urgent) |
-| Medications | **40** |
-| Lab panel types | **6** |
-| Imaging report types | **10** |
-
----
-
-## Evaluation
-
-| Metric | Score | Target |
-|--------|-------|--------|
-| LLM-as-judge Faithfulness | 0.60 | > 0.85 |
-| Answer Relevancy | 0.66 | > 0.80 |
-| Context Recall | 0.28 | > 0.75 |
-| End-to-end latency (Groq) | **6.1s** ✅ | < 8s |
-| Avg latency (warm) | **3.7s** ✅ | < 6s |
-
-Evaluation uses a custom LLM-as-judge framework over 50 diverse clinical QA pairs spanning medications, vital signs, lab results, imaging, and treatment plans. Improvement roadmap: LoRA domain fine-tuning + query expansion (implemented in `src/retrieval/query_expansion.py`).
-
----
-
-## HIPAA Compliance
-
-| Feature | Implementation |
-|---------|---------------|
-| PHI De-identification | Microsoft Presidio — all 18 Safe Harbor identifiers |
-| Audit Trail | SHA-256 hashed query/response pairs in SQLite |
-| Local Inference | Ollama — no PHI leaves the device |
-| Guardrail | Lexical grounding filter on every response |
-| TTS Safety | PHI redacted before speech synthesis |
-
----
-
-## Quick Start
+## ⚡ Quickstart
 
 ### Prerequisites
+- Docker + Docker Compose
+- Python 3.11+
+- Kaggle account (for dataset download)
 
-- Mac Apple Silicon (M1/M2/M3) or Linux
-- Python 3.11
-- [Ollama](https://ollama.com) (for local inference)
-- Free API keys: [Groq](https://console.groq.com) · [ElevenLabs](https://elevenlabs.io)
-
-### Setup
+### 1. Clone and install
 
 ```bash
-git clone https://github.com/bhavyalakkamraju09/clinical-rag-voice-agent
-cd clinical-rag-voice-agent
-
-conda create -n clinical-rag python=3.11 && conda activate clinical-rag
+git clone https://github.com/bhavyalakkamraju09/fraud-detection-realtime
+cd fraud-detection-realtime
+conda create -n fraud-detection python=3.11
+conda activate fraud-detection
 pip install -r requirements.txt
-python -m spacy download en_core_web_lg
-```
-
-### Local LLM
-
-```bash
-ollama pull llama3.1:8b
-ollama serve
-```
-
-### Configuration
-
-```bash
 cp .env.example .env
-# GROQ_API_KEY       → console.groq.com  (free, 14,400 req/day)
-# ELEVENLABS_API_KEY → elevenlabs.io     (free, 10K chars/month)
 ```
 
-### Build & Run
+### 2. Start infrastructure
 
 ```bash
-make data      # generate 10,000 synthetic clinical notes
-make index     # build FAISS + BM25 indexes (~8 min)
-make run-api   # terminal 1 → FastAPI on :8000
-make run-ui    # terminal 2 → Streamlit on :8501
+make up
+# Starts: Kafka, Zookeeper, Redis, PostgreSQL, Prometheus, Grafana, MLflow
+# Grafana:  http://localhost:3000  (admin/admin)
+# MLflow:   http://localhost:5000
+```
+
+### 3. Download IEEE-CIS dataset
+
+```bash
+# Set up Kaggle API: https://www.kaggle.com/docs/api
+kaggle competitions download -c ieee-fraud-detection
+unzip ieee-fraud-detection.zip -d data/raw/
+```
+
+### 4. Build features + train models
+
+```bash
+python src/features/engineering.py    # ~5 min on 590K rows
+make train                             # XGBoost + LightGBM, ~15–25 min each
+```
+
+MLflow UI at `http://localhost:5000` will show all runs, metrics, and saved models.
+
+### 5. Start the streaming pipeline
+
+```bash
+make stream
+# Launches: Kafka producer (50 tx/sec) + consumer (score + explain)
+```
+
+### 6. Open the live dashboard
+
+```bash
+make dashboard
+# http://localhost:8501
 ```
 
 ---
 
-## Project Structure
+## 📁 Repository Structure
 
 ```
-clinical-rag-voice-agent/
-├── src/
-│   ├── ingestion/         chunker · embedder · indexer
-│   ├── retrieval/         bm25 · faiss · rrf_fusion · reranker · query_expansion
-│   ├── agent/             state · nodes · graph · memory
-│   ├── llm/               ollama_client · groq_client · prompts
-│   ├── voice/             stt (Whisper) · tts (ElevenLabs)
-│   ├── compliance/        phi_redactor · audit_logger · mlflow_tracker
-│   └── api/               FastAPI routes · streaming endpoint
-├── app/
-│   └── streamlit_app.py
+fraud-detection-realtime/
 ├── data/
-│   └── synthetic/         generate_synthetic_notes.py
-├── evaluation/
-│   ├── create_golden_set.py
-│   ├── run_evaluation.py
-│   └── benchmark_retrieval.py
-├── fine_tuning/
-│   ├── train_lora_colab.py
-│   └── prepare_dataset.py
-├── .github/workflows/     CI/CD pipeline
+│   ├── raw/                    # IEEE-CIS CSVs (gitignored)
+│   ├── processed/              # Parquet features (generated)
+│   └── synthetic/
+│       └── generate_stream.py  # Poisson-process Kafka producer
+│
+├── src/
+│   ├── features/
+│   │   ├── engineering.py      # Offline feature construction (14 features)
+│   │   ├── redis_store.py      # Rolling window aggregations via Redis sorted sets
+│   │   └── schema.py           # Pydantic schemas
+│   │
+│   ├── models/
+│   │   ├── train_xgb.py        # XGBoost: 5-fold CV + SMOTE + MLflow
+│   │   ├── train_lgbm.py       # LightGBM challenger
+│   │   ├── evaluate.py         # AUC-ROC, AUC-PR, F1, confusion matrix
+│   │   └── threshold.py        # Optimal threshold via precision-recall curve
+│   │
+│   ├── streaming/
+│   │   ├── consumer.py         # Kafka consumer: feature store → score → explain → publish
+│   │   └── ab_router.py        # 80/20 A/B router + Mann-Whitney U test
+│   │
+│   ├── explainability/
+│   │   └── shap_explainer.py   # SHAP TreeExplainer: per-tx + summary plots
+│   │
+│   ├── monitoring/
+│   │   ├── drift_detector.py   # Evidently data drift + model performance
+│   │   └── metrics.py          # Prometheus counters, histograms, gauges
+│   │
+│   └── api/
+│       └── main.py             # FastAPI: /score, /explain, /ab-status
+│
+├── app/
+│   └── streamlit_dashboard.py  # Live fraud monitor
+│
+├── tests/
+│   ├── test_features.py
+│   ├── test_ab_router.py
+│   └── test_scoring.py
+│
+├── scripts/
+│   └── init_db.sql             # PostgreSQL schema
+│
 ├── docker-compose.yml
-└── Makefile
+├── prometheus.yml
+├── Makefile
+└── requirements.txt
 ```
 
 ---
 
-## Design Decisions
+## 🔬 Key Design Decisions
 
-**RRF over weighted fusion** — Parameter-free combination of BM25 sparse scores and FAISS cosine similarities. Eliminates the need to tune a mixing coefficient α.
+### Why AUC-PR over AUC-ROC for fraud?
+With 1.5% fraud rate, a model predicting all-legitimate achieves AUC-ROC ~0.5 but looks misleadingly good on accuracy metrics. AUC-PR focuses on the minority class precision-recall tradeoff — where a fraud model is actually evaluated in production. False negatives (missed fraud) and false positives (blocked legitimate cards) have asymmetric costs that the PR curve surfaces directly.
 
-**LangGraph over vanilla LangChain** — Typed state machine with conditional edges makes the guardrail retry loop, multi-turn memory, and future human-in-the-loop extensions first-class citizens.
+### Why SMOTE only inside each CV fold?
+Classic data leakage trap: applying SMOTE before splitting means synthetic minority-class samples derived from validation data leak into training, inflating OOF metrics. SMOTE must run inside each fold on training data only.
 
-**Two-stage retrieval** — Bi-encoder FAISS handles broad candidate generation efficiently; cross-encoder re-ranker scores (query, passage) pairs jointly for precision. Pre-filtering to top-10 keeps O(N) cross-encoder cost manageable.
+### Why Redis for the feature store?
+Sub-millisecond sorted-set operations for rolling window aggregations. Writing + reading user features per transaction completes in < 1ms, keeping the scoring pipeline under the 10ms SLA. PostgreSQL would be 10–50× slower for these random-access patterns.
 
-**Presidio over regex** — NER-based PHI detection handles partial matches and contextual identifiers that regex patterns miss, covering all 18 HIPAA Safe Harbor types.
+### Why Mann-Whitney U over Z-test for A/B?
+Z-test assumes normality of AUC distributions. With small evaluation windows (100 transactions), that assumption fails. Mann-Whitney U is non-parametric and more conservative — preventing premature challenger promotion based on noise.
 
-**Groq for inference** — llama-3.1-8b-instant at 14,400 free requests/day reduces latency from ~60s (CPU Ollama) to 6s without compromising HIPAA safety for demo purposes. Ollama remains the default for fully air-gapped deployments.
-
----
-
-## Voice Pipeline
-
-```python
-from src.agent.graph import get_graph
-
-agent = get_graph()
-result = agent.invoke({
-    "audio_path": "patient_question.wav",
-    "turn_history": [],
-    "guardrail_passed": False,
-    "guardrail_attempts": 0,
-})
-
-print(result["phi_clean_answer"])   # PHI-redacted text response
-# result["audio_path"]              # path to ElevenLabs .mp3
-```
+### Why SHAP TreeExplainer only on flagged transactions?
+SHAP adds ~2–5ms per transaction. At 500 tx/sec, computing it for every transaction would consume significant CPU. Restricting to flagged transactions reduces SHAP overhead by ~98.5% at 1.5% fraud rate while preserving full explainability where it matters.
 
 ---
 
-## LoRA Fine-Tuning
+## 📊 Feature Engineering
 
-Domain adaptation for clinical abbreviations (HTN, SOB, Hx) using Colab T4 (free):
+| Feature | Description | Why it matters |
+|---|---|---|
+| `log_amount` | log(1 + TransactionAmt) | Normalises heavy-tailed distribution |
+| `amount_cents` | Fractional cents | Fraud often uses round numbers |
+| `hour` / `day_of_week` | Time of transaction | Fraud peaks at night / weekends |
+| `is_weekend` | Binary flag | Different spending patterns |
+| `amount_zscore` | (amount − card_mean) / card_std | Anomalous spend vs card history |
+| `email_fraud_rate` | Target-encoded email domain fraud rate | High-risk domains (disposable emails) |
+| `card_tx_count` | Historical transaction count | Low count = new card = higher risk |
+| `card_mean_amt` | Card's average transaction amount | Baseline for z-score |
+| `is_mobile` | Device type | Mobile transactions show different patterns |
+| `tx_count_1h` | Rolling 1h transaction count | Velocity check — fraud bursts |
+| `tx_count_24h` | Rolling 24h transaction count | Daily velocity |
+| `avg_amount_24h` | Rolling 24h average amount | Drift from normal spend |
+| `max_amount_24h` | Rolling 24h max amount | Anomalous high-value spikes |
+
+---
+
+## 🧪 Running Tests
 
 ```bash
-make finetune-prep                  # prepare training data locally
-# Upload fine_tuning/ to Colab T4
-# Run train_lora_colab.py (~2 hrs, r=16 LoRA on q_proj + v_proj)
-python fine_tuning/merge_adapter.py # merge weights for Ollama import
+make test
+# or
+pytest tests/ -v --cov=src --cov-report=term-missing
 ```
+
+All tests run without Kafka, Redis, or trained models (pure unit tests).
 
 ---
 
-## Docker
+## 🌐 Deployment
 
+### Render.com (free tier)
 ```bash
-make docker-up
-# FastAPI  → localhost:8000
-# Streamlit → localhost:8501
-# MLflow   → localhost:5000
+# Dashboard: deploy app/streamlit_dashboard.py
+# Set env vars: KAFKA_BROKER, REDIS_HOST
+# Note: free tier sleeps after 15min inactivity — sufficient for demos
+```
+
+### HuggingFace Spaces
+```bash
+# Create a Streamlit Space and push the repo
+# Set secrets in the Space settings panel
 ```
 
 ---
 
-## Free Tier
+## 💬 Want to Chat About This Project?
 
-| Service | Allowance |
-|---------|-----------|
-| Ollama | Unlimited (local) |
-| Groq | 14,400 req/day |
-| ElevenLabs | 10,000 chars/month |
-| HuggingFace Spaces | Free CPU |
-| Colab T4 | ~4 hrs/day |
+I'd love to hear from you! Whether you're a recruiter, fellow engineer, or just someone curious about fraud detection and ML systems — feel free to reach out.
+
+Some things we could talk about:
+- How the real-time pipeline handles 500+ transactions per second without breaking a sweat 🚀
+- Why I chose Mann-Whitney U over a Z-test for the A/B evaluation (hint: it's about not assuming normality)
+- What SHAP actually tells you about *why* a transaction looks suspicious
+- How to set up this whole stack on your own machine in under 30 minutes
+- Anything else ML, LLMs, or production AI systems — genuinely my favourite topics
+
+**Reach out anytime:**
+- 💼 [linkedin.com/in/bhavya-varma](https://linkedin.com/in/bhavya-varma)
+- 📧 bhavyasrilakkamraju09@gmail.com
+- 🐙 [github.com/bhavyalakkamraju09](https://github.com/bhavyalakkamraju09)
 
 ---
 
-<div align="center">
-
-Built by **Bhavya Lakkamraju** · MS Computer Science, Lawrence Technological University · 2026
-
-[GitHub](https://github.com/bhavyalakkamraju09) · [LinkedIn](https://linkedin.com/in/bhavya-varma) · [HuggingFace](https://huggingface.co/bhavyalakkamraju09)
-
-</div>
+*Built by Bhavya Lakkamraju — [linkedin.com/in/bhavya-varma](https://linkedin.com/in/bhavya-varma) · [github.com/bhavyalakkamraju09](https://github.com/bhavyalakkamraju09)*
