@@ -251,7 +251,6 @@ Some things we could talk about:
 **Reach out anytime:**
 - 💼 [linkedin.com/in/bhavya-varma](https://linkedin.com/in/bhavya-varma)
 - 📧 bhavyasrilakkamraju09@gmail.com
-- 🐙 [github.com/bhavyalakkamraju09](https://github.com/bhavyalakkamraju09)
 
 ---
 
