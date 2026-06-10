@@ -1,0 +1,12 @@
+data/raw/
+data/processed/
+models/
+*.pkl
+*.parquet
+*.csv
+__pycache__/
+**/__pycache__/
+*.pyc
+.env
+.DS_Store
+*.pyc
